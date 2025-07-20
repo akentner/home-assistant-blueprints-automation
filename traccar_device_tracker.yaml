@@ -1,0 +1,70 @@
+blueprint:
+  name: Traccar Device Tracker Proxy
+  description: Publish device tracker updates to Traccar via REST command.
+  domain: automation
+  # source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/automation/blueprints/motion_light.yaml
+  input:
+    device_tracker_or_person:
+      name: Device Tracker or Person
+      description: A device tracker or person entity that will be used to update the Traccar server. 
+      selector:
+        entity:
+          domain: 
+            - device_tracker
+            - person
+    battery_state:
+      name: Battery charging state
+      description: The battery charging state to be sent to Traccar.
+      selector:
+        entity:
+          domain:
+            - sensor
+          # filter:
+          #   - entity_id: "*battery_state*"
+
+    driver_unique_id:
+      name: Driver Unique ID
+      description: The unique identifier for the driver.
+      selector:
+        text:
+
+
+mode: single
+max_exceeded: silent
+
+variables:
+  device_tracker_or_person: !input device_tracker_or_person
+  driver_unique_id: !input driver_unique_id
+  battery_state: !input battery_state
+
+triggers:
+  - entity_id: !input device_tracker_or_person
+    attribute: latitude
+    trigger: state
+  - entity_id: !input device_tracker_or_person
+    attribute: battery_level
+    trigger: state
+  - entity_id: !input battery_state
+    trigger: state
+
+conditions: []
+
+actions:
+  - action: rest_command.traccar_update
+    response_variable: response
+    data: 
+      id: "{{ device_tracker_or_person }}"
+      timestamp: "{{ states[device_tracker_or_person].last_updated }}"
+      lat: >-
+        {{ state_attr(device_tracker_or_person, 'latitude') | float }}
+      lon: >-
+        {{ state_attr(device_tracker_or_person, 'longitude') | float }}
+      accuracy: >-
+        {{ state_attr(device_tracker_or_person, 'gps_accuracy') }}
+      batt: >-
+        {{ state_attr(device_tracker_or_person, 'battery_level') }}
+      driverUniqueId: "{{ driver_unique_id }}"
+      charge: >-
+        {{ 
+          iif(states(battery_state) == 'Not Charging', '0', '1')
+        }}

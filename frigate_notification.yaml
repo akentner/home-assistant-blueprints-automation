@@ -1,0 +1,249 @@
+blueprint:
+  name: Frigate Notification (akentner)
+  description: "## Frigate Mobile App Notification"
+  domain: automation
+  source_url: https://gist.github.com/hunterjm/23c1588a9f2b8b9c2a62ffc364e17f8c
+  input:
+    camera:
+      name: Frigate Camera
+      description: The name of the camera as defined in your frigate configuration.
+    notify_device:
+      name: Device
+      description: The device must run the official Home Assistant app to receive
+        notifications.
+      default: false
+      selector:
+        device:
+          integration: mobile_app
+    notify_group:
+      name: Notification Group
+      description: The name of the notification group to call.
+      default: ''
+    notify_target:
+      name: Notification Target
+      description: The name of the notification target.
+      default: ''
+    base_url:
+      name: (Optional) Base URL
+      description: 'The external url for your Home Assistant instance. This will default
+        to a relative URL and will open the clips in the app instead of the browser,
+        which may cause issues on some devices.
+
+        '
+      default: ''
+    zone_filter:
+      name: (Optional) Zone Filter
+      description: Only notify if object has entered a defined zone.
+      default: false
+      selector:
+        boolean: {}
+    zones:
+      name: (Optional) Trigger Zones
+      description: A list (-) of zones you wish to receive notifications for.
+      default: []
+      selector:
+        object: {}
+    labels:
+      name: (Optional) Trigger Objects
+      description: A list (-) of objects you wish to receive notifications for.
+      default: []
+      selector:
+        object: {}
+    presence_filter:
+      name: (Optional) Presence Filter
+      description: Only notify if selected presence entity is not "home".
+      default: ''
+      selector:
+        entity: {}
+    cooldown:
+      name: (Optional) Cooldown
+      description: Delay before sending another notification for this camera after
+        the last event.
+      default: 30
+      selector:
+        number:
+          max: 300.0
+          min: 0.0
+          unit_of_measurement: seconds
+          mode: slider
+          step: 1.0
+    silence_timer:
+      name: (Optional) Silence Notifications
+      description: 'How long to silence notifications for this camera when requested
+        as part of the actionable notification.
+
+        '
+      default: 30
+      selector:
+        number:
+          max: 300.0
+          min: 0.0
+          unit_of_measurement: minutes
+          mode: slider
+          step: 1.0
+mode: single
+max_exceeded: silent
+trigger:
+  - platform: mqtt
+    topic: frigate/events
+    payload: !input 'camera'
+    value_template: '{{ value_json[''after''][''camera''] }}'
+  - platform: mqtt
+    topic: frigate/debug_events
+    payload: !input 'camera'
+    value_template: '{{ value_json[''after''][''camera''] }}'
+variables:
+  id: '{{ trigger.payload_json[''after''][''id''] }}'
+  camera: '{{ trigger.payload_json[''after''][''camera''] }}'
+  camera_name: '{{ camera | replace(''_'', '' '') | title }}'
+  object: '{{ trigger.payload_json[''after''][''label''] }}'
+  label: '{{ object | title }}'
+  entered_zones: '{{ trigger.payload_json[''after''][''entered_zones''] }}'
+  type: '{{ trigger.payload_json[''type''] }}'
+  base_url: !input 'base_url'
+  group_target: !input 'notify_group'
+  input_notify_target: !input 'notify_target'
+  zone_only: !input 'zone_filter'
+  input_zones: !input 'zones'
+  zones: '{{ input_zones | list }}'
+  input_labels: !input 'labels'
+  labels: '{{ input_labels | list }}'
+  presence_entity: !input 'presence_filter'
+condition:
+- '{{ type != ''end'' }}'
+- '{{ not zone_only or entered_zones|length > 0 }}'
+- '{{ not zones|length or zones|select(''in'', entered_zones)|list|length > 0 }}'
+- '{{ not labels|length or object in labels }}'
+- '{{ not presence_entity or not is_state(presence_entity, ''home'') }}'
+action:
+- choose:
+  - conditions: '{{ not group_target }}'
+    sequence:
+    - device_id: !input 'notify_device'
+      domain: mobile_app
+      type: notify
+      message: 'Die Kamera {{ camera_name }} hat was entdeckt: {{ label }}.'
+      data:
+        tag: '{{ id }}'
+        group: frigate-notification-{{ camera }}
+        duration: 15
+        #image: /api/frigate/notifications/{{id}}/thumbnail.jpg?format=android
+        image: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+        photo:
+          - url: '{{base_url}}/api/frigate/notifications/{{id}}/thumbnail.jpg?format=android'
+            caption: Thumbnail
+          - url: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+            caption: Snapshot
+        attachment:
+          url: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+  default:
+  - service: notify.{{ group_target }}
+    data:
+      message: 'Die Kamera {{ camera_name }} hat was entdeckt: {{ label }}.'
+      target: '{{ input_notify_target }}'
+      data:
+        tag: '{{ id }}'
+        group: frigate-notification-{{ camera }}
+        duration: 15
+        #image: /api/frigate/notifications/{{id}}/thumbnail.jpg?format=android
+        image: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+        photo:
+          - url: '{{base_url}}/api/frigate/notifications/{{id}}/thumbnail.jpg?format=android'
+            caption: Thumbnail
+          - url: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+            caption: Snapshot
+        attachment:
+          url: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+- repeat:
+    sequence:
+    - wait_for_trigger:
+      - platform: mqtt
+        topic: frigate/events
+        payload: '{{ id }}'
+        value_template: '{{ value_json[''after''][''id''] }}'
+      timeout:
+        minutes: 2
+      continue_on_timeout: false
+    - condition: template
+      value_template: '{{ wait.trigger.payload_json[''type''] == ''end'' }}'
+    - choose:
+      - conditions: '{{ not group_target }}'
+        sequence:
+        - device_id: !input 'notify_device'
+          domain: mobile_app
+          type: notify
+          message: 'Die Kamera {{ camera_name }} hat was entdeckt: {{ label }}.'
+          data:
+            tag: '{{ id }}'
+            group: frigate-notification-{{ camera }}
+            url: '{{base_url}}/api/frigate/notifications/{{id}}/{{camera}}/clip.mp4'
+            clickAction: '{{base_url}}/api/frigate/notifications/{{id}}/{{camera}}/clip.mp4'
+            #image: /api/frigate/notifications/{{id}}/thumbnail.jpg?format=android
+            image: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+            photo: # Telegram
+              - url: '{{base_url}}/api/frigate/notifications/{{id}}/thumbnail.jpg?format=android'
+                caption: Thumbnail
+              - url: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+                caption: Snapshot
+            video: # Telegram
+              - url: '{{base_url}}/api/frigate/notifications/{{id}}/{{camera}}/clip.mp4'
+                caption: Video
+            sound: none
+            duration: 15
+            attachment:
+              url: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+            actions:
+            - action: URI
+              title: Clip anzeigen
+              uri: '{{base_url}}/api/frigate/notifications/{{id}}/{{camera}}/clip.mp4'
+            - action: URI
+              title: Snapshot anzeigen
+              uri: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+            - action: silence-{{ camera }}
+              title: Silence Notifications
+              destructive: true
+      default:
+      - service: notify.{{ group_target }}
+        data:
+          message: 'Die Kamera {{ camera_name }} hat was entdeckt: {{ label }}.'
+          target: '{{ input_notify_target }}'
+          data:
+            tag: '{{ id }}'
+            group: frigate-notification-{{ camera }}
+            url: '{{base_url}}/api/frigate/notifications/{{id}}/{{camera}}/clip.mp4'
+            clickAction: '{{base_url}}/api/frigate/notifications/{{id}}/{{camera}}/clip.mp4'
+            #image: /api/frigate/notifications/{{id}}/thumbnail.jpg?format=android
+            image: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+            photo: # Telegram
+              - url: '{{base_url}}/api/frigate/notifications/{{id}}/thumbnail.jpg?format=android'
+                caption: Thumbnail
+              - url: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+                caption: Snapshot
+            video: # Telegram
+              - url: '{{base_url}}/api/frigate/notifications/{{id}}/{{camera}}/clip.mp4'
+                caption: Video
+            sound: none
+            duration: 15
+            attachment:
+              url: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+            actions:
+            - action: URI
+              title: Clip anzeigen
+              uri: '{{base_url}}/api/frigate/notifications/{{id}}/{{camera}}/clip.mp4'
+            - action: URI
+              title: Snapshot anzeigen
+              uri: '{{base_url}}/api/frigate/notifications/{{id}}/snapshot.jpg'
+            - action: silence-{{ camera }}
+              title: Silence Notifications
+              destructive: true
+    until: '{{ wait.trigger.payload_json[''type''] == ''end'' }}'
+- wait_for_trigger:
+  - platform: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: silence-{{ camera }}
+  timeout:
+    seconds: !input 'cooldown'
+  continue_on_timeout: false
+- delay:
+    minutes: !input 'silence_timer'

@@ -1,0 +1,74 @@
+blueprint:
+  name: Config Entry Management by Availability
+  description: Enable and disable a config entry based on its availability.
+  domain: automation
+  # source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/automation/blueprints/motion_light.yaml
+  input:
+    availability_entity:
+      name: Availability Sensor
+      description: A binary_sensor with device_class problem or connectivity, that indicates the availability of the config entry. 
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: 
+            - problem
+            - connectivity
+    management_config_entry:
+      name: Config Entry
+      selector:
+        config_entry:
+
+
+mode: single
+max_exceeded: silent
+
+
+triggers:
+  - trigger: state
+    entity_id: !input availability_entity
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 30
+  - trigger: time_pattern
+    seconds: "0"
+
+conditions: []
+
+actions:
+  - variables:
+      input_availability_entity: !input availability_entity
+      management_config_entry: !input management_config_entry
+  - variables:
+      management_config_entry_state: >
+        {{ config_entry_attr(management_config_entry, 'state') }}
+      available_state: >
+        {{ iif(is_state_attr(input_availability_entity, 'device_class', 'problem'), 'off', 'on') }}  
+  - choose:
+      - alias: Enable config entry if availability is OK and config entry is disabled
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ is_state(input_availability_entity, available_state) }}
+          - condition: template
+            value_template: >-
+              {{ management_config_entry_state == 'ConfigEntryState.NOT_LOADED' }}
+        sequence:
+          - action: homeassistant.enable_config_entry
+            metadata: {}
+            data:
+              config_entry_id: !input management_config_entry
+                
+      - alias: Disable config entry if availability is not OK, but config entry is enabled
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ not is_state(input_availability_entity, available_state) }}
+          - condition: template
+            value_template: >-
+              {{ management_config_entry_state != 'ConfigEntryState.NOT_LOADED' }}
+        sequence:
+          - action: homeassistant.disable_config_entry
+            metadata: {}
+            data:
+              config_entry_id: !input management_config_entry
