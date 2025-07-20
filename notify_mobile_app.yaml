@@ -1,0 +1,114 @@
+blueprint:
+  name: '[Notifications] Mobile App'
+  description: Fire a notification only if it is active by a binary_sensor
+  domain: automation
+  # source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/template/blueprints/inverted_binary_sensor.yaml
+  input:
+
+    device:
+      name: "Mobile App Device"
+      description: ""
+      selector:
+        device:
+          integration: mobile_app
+
+    config_entry:
+      name: "Mobile App"
+      description: "Select the mobile_app notify service."
+      selector:
+        config_entry:
+          # integration: nfandroidtv
+          integration: mobile_app
+          # integration: alexa_media
+
+    # person:
+    #   name: "Person"
+    #   description: ""
+    #   selector:
+    #     entity:
+    #       filter:
+    #         domain: person
+
+    person_dnd:
+      name: "Person Do Not Disturb Entity"
+      description: |
+        The entity that represents the Do Not Disturb status of the person. If the entity is `on`, the person is in Do Not Disturb mode and notifications will not be sent.
+      selector:
+        entity:
+          domain: 
+            - input_boolean
+            - binary_sensor
+            
+
+mode: restart
+
+trigger_variables:
+  input_device: !input device
+  # input_person:  !input person
+  input_person_dnd: !input person_dnd
+  listen_target: 
+  # - !input person
+    - !input device
+    - "device_type.mobile_app"
+   
+triggers:
+  - trigger: event
+    event_type: notification_notify
+    variables: 
+      foo: "bar"
+
+conditions:
+  - alias: check for target
+    condition: template
+    value_template: >-
+      {%- set ns = namespace(linked_persons=[]) -%}
+      {%- set tracker_entities = device_entities(input_device) | select('match', '^device_tracker') | list -%}
+      {%- for person in states.person -%}
+        {%- set person_trackers = person.attributes.device_trackers | default([]) -%}
+        {%- if person_trackers | select("in", tracker_entities) | list | count > 0 -%}
+          {%- set ns.linked_persons = ns.linked_persons + [ person.entity_id ] -%}
+        {%- endif -%}  
+      {%- endfor -%}
+      {%- set listen_target = listen_target + ns.linked_persons -%}
+
+      {{ trigger.event.data.target | select("in", listen_target) | list | count > 0 }}
+  - alias: check for person dnd
+    condition: template
+    value_template: >-
+      {{ not is_state(input_person_dnd, 'on') }}
+
+actions:
+  - variables:
+      notification: "{{ trigger.event.data }}"
+      dnd: "{{ is_state(input_person_dnd, 'on') }}"
+      target: >-
+        {%- set ns = namespace(linked_persons=[]) -%}
+        {%- set tracker_entities = device_entities(input_device) | select('match', '^device_tracker') | list -%}
+        {%- for person in states.person -%}
+          {%- set person_trackers = person.attributes.device_trackers | default([]) -%}
+          {%- if person_trackers | select("in", tracker_entities) | list | count > 0 -%}
+            {%- set ns.linked_persons = ns.linked_persons + [ person.entity_id ] -%}
+          {%- endif -%}  
+        {%- endfor -%}
+        {%- set listen_target = listen_target + ns.linked_persons -%}
+
+        {{ trigger.event.data.target | select("in", listen_target) | list }}
+  - variables:
+      message: "{{- notification.message.split('|')|map('trim')|map('striptags')|join('<br>') -}}"
+      title: "{{- notification.title -}}"
+
+
+
+
+  - action: persistent_notification.create
+    metadata: {}
+    data:
+      title: "{{ title }}"
+      message: |-
+        {{ message }}
+         
+        - Target: [{{ target | join(',') }}]
+        - Data: {{ notification.data | tojson }}
+        - DND: {{ dnd }}
+
+

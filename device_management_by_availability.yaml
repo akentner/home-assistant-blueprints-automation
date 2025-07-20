@@ -1,0 +1,74 @@
+blueprint:
+  name: Device Management by Availability
+  description: Enable and disable devices based on their availability.
+  domain: automation
+  # source_url: https://github.com/home-assistant/core/blob/dev/homeassistant/components/automation/blueprints/motion_light.yaml
+  input:
+    availability_entity:
+      name: Availability Sensor
+      description: A binary_sensor with device_class problem or connectivity, that indicates the availability of the device. 
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: 
+            - problem
+            - connectivity
+    management_device:
+      name: Device
+      selector:
+        device:
+
+
+mode: single
+max_exceeded: silent
+
+
+triggers:
+  - trigger: state
+    entity_id: !input availability_entity
+    for:
+      hours: 0
+      minutes: 0
+      seconds: 30
+  - trigger: time_pattern
+    seconds: "0"
+
+conditions: []
+
+actions:
+  - variables:
+      input_availability_entity: !input availability_entity
+      input_management_device: !input management_device
+  - variables:
+      device_entities: >
+        {{ device_entities(input_management_device) }}
+      available_state: >
+        {{ iif(is_state_attr(input_availability_entity, 'device_class', 'problem'), 'off', 'on') }}  
+  - choose:
+      - alias: Enable device if availability is OK and device is disabled
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ is_state(input_availability_entity, available_state) }}
+          - condition: template
+            value_template: >-
+              {{ device_entities | count == 0 }}
+        sequence:
+          - action: homeassistant.enable_device
+            metadata: {}
+            data:
+              device_id: !input management_device
+                
+      - alias: Disable device if availability is not OK, but device is enabled
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ not is_state(input_availability_entity, available_state) }}
+          - condition: template
+            value_template: >-
+              {{ device_entities | count > 0 }}
+        sequence:
+          - action: homeassistant.disable_device
+            metadata: {}
+            data:
+              device_id: !input management_device
