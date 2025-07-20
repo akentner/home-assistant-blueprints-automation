@@ -1,0 +1,207 @@
+blueprint:
+  name: MQTT Area Scene with Discovery
+  description: "Creates a scene entity that can be controlled via MQTT and publishes discovery data."
+  domain: automation
+  source_url: https://github.com/akentner/ha-blueprints
+  input:
+    name:
+      name: Name
+      description: "The name of the entity."
+      selector:
+        text:
+    area:
+      name: Area
+      description: "The area where the scene will be used."
+      selector:
+        area:
+    state_topic:
+      name: MQTT State Topic
+      description: "MQTT state topic to listen to"
+      selector:
+        text:
+    command_topic:
+      name: MQTT Command Topic
+      description: "MQTT command topic to listen to"
+      selector:
+        text:
+    scene_names:
+      name: Scenes
+      description: "List of scene names. Each entry will be an option."
+      selector:
+        object:
+          multiple: true
+          fields:
+            name:
+              label: Scene Name
+              selector: 
+                text:
+            entity_name:
+              label: Entity Name
+              selector:
+                text:
+            icon:
+              label: Scene Icon (optional)
+              selector:
+                icon:
+            color:
+              label: Scene Color (optional)
+              selector:
+                color_rgb:
+            action_sequence:
+              label: Action (optional)
+              selector:
+                action:
+
+    action_sequence:
+      name: Actions
+      description: "The actions to execute when a new payload is received."
+      default: []
+      selector:
+        action:
+
+variables:
+  name: !input name
+  area: !input area
+  scene_names: !input scene_names
+  state_topic: !input state_topic
+  command_topic: !input command_topic
+  
+
+trigger:
+  - platform: homeassistant
+    event: start
+    id: Home Assistant started
+  - platform: event
+    event_type: automation_reloaded
+    id: Automations reloaded    
+  - platform: mqtt
+    topic: !input command_topic
+    id: MQTT Command Topic Trigger
+
+action:
+  - variables:
+      state_topic: !input state_topic
+      command_topic: !input command_topic
+      device_info: >-
+        {{- {
+          "name": area_name(area) if area else name,
+          "identifiers": 'mqtt_area_scene_' ~ area,
+          "suggested_area": area_name(area)
+        } -}}
+
+  - choose:
+    - conditions:
+        - condition: trigger
+          id: 
+            - Home Assistant started
+            - Automations reloaded
+
+      sequence:
+        - variables:
+            object_id: >-
+              {{ area ~ '_scene' }}
+
+        - variables:
+            select_discovery: >-
+              {%- set select_data = {
+                "unique_id": 'select.' ~ object_id,
+                "object_id": object_id,
+                "name": name ~ ' Auswahl',
+                "state_topic": state_topic,
+                "value_template": '{{ value_json.state }}',
+                "command_topic": command_topic,
+                "command_template": '{{ {"state": value} | tojson }}',
+                "options": scene_names | map(attribute='name') | list,
+                "qos": 0,
+                "retain": true,
+                "enabled_by_default": true,
+                "device": device_info
+              } -%}
+              {{- select_data -}}
+
+        - service: mqtt.publish
+          data:
+            topic: >-
+              homeassistant/select/{{ object_id }}/config
+            payload: >-
+              {{ select_discovery | tojson }}
+            qos: 0
+            retain: true
+
+        - repeat:
+            for_each: "{{ scene_names }}"
+            sequence:
+              - variables:
+                  item: "{{ repeat.item }}"
+                  entity_name: >-
+                    {{- repeat.item.get('entity_name') or repeat.item.name|lower|replace(' ', '_') -}}
+                  icon: >-
+                    {{ repeat.item.get('icon') or 'mdi:lightbulb' }}
+                  color: >-
+                    {%- set rgb = repeat.item.get('color') or [255,255,255] -%}
+                    {{ "#%02x%02x%02x" | format( rgb[0] | int, rgb[1] | int, rgb[2] | int) }}    
+              - variables:
+                  object_id: >-
+                    {{- area ~ '_' ~ entity_name -}}
+              - variables:
+                  scene_discovery: >-
+                    {%- set scene_data = {
+                      "unique_id": 'scene.' ~ object_id,
+                      "object_id": object_id,
+                      "name": repeat.item.name,
+                      "command_topic": command_topic,
+                      "payload_on": ( {"state": repeat.item.name } | to_json ),
+                      "qos": 0,
+                      "retain": true,
+                      "enabled_by_default": true,
+                      "device": device_info,
+                      "icon": icon,
+                      "json_attributes_topic": state_topic,
+                      "json_attributes_template": '{{- 
+                        {
+                          "active": (value_json.state == "' ~ repeat.item.name ~ '"), 
+                          "value": "' ~ repeat.item.name ~ '",
+                          "color": "' ~ color ~ '",
+                        } | tojson 
+                      -}}',
+                    } -%}
+                    {{ scene_data }}
+              - service: mqtt.publish
+                data:
+                  topic: >-
+                    homeassistant/scene/{{ object_id }}/config
+                  payload: >-
+                    {{ scene_discovery | tojson }}
+                  qos: 0
+                  retain: true
+    - conditions:
+        - condition: trigger
+          id: MQTT Command Topic Trigger
+      sequence:
+        - variables:
+            payload: >-
+              {{ trigger.payload | from_json }}
+        - variables:
+            selected_scene: >-
+              {{ scene_names | selectattr('name', 'equalto', payload.state) | first | default(none) }}
+        - if:
+            - condition: template
+              value_template: >-
+                {{ selected_scene != none and selected_scene.action_sequence is defined and selected_scene.action_sequence | length > 0 }}
+          then:
+            - repeat:
+                for_each: "{{ selected_scene.action_sequence }}"
+                sequence:
+                  - action: "{{ repeat.item.action }}"
+                    data: "{{ repeat.item.data | default({}) }}"
+                    target: "{{ repeat.item.target | default({}) }}"
+        - sequence: !input action_sequence
+        - sequence:
+          - service: mqtt.publish
+            data:
+              topic: >-
+                {{ state_topic }}
+              payload: >-
+                {{ {"state": payload.state} | tojson }}
+              qos: 0
+              retain: true
